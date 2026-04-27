@@ -3,8 +3,8 @@
 import { useActionState } from "react";
 import {
   createComparisonAction,
-  initialCreateComparisonState,
 } from "@/app/compare/actions";
+import { initialCreateComparisonState } from "@/app/compare/state";
 import { FormSubmitButton } from "@/components/form-submit-button";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";

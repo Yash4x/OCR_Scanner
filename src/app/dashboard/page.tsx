@@ -19,7 +19,15 @@ function formatDate(dateString: string) {
 }
 
 function statusVariant(status: string): "success" | "secondary" {
-  return status === "uploaded" ? "success" : "secondary";
+  if (status === "processing") {
+    return "secondary";
+  }
+
+  if (status === "processed" || status === "completed" || status === "uploaded") {
+    return "success";
+  }
+
+  return "secondary";
 }
 
 export default async function DashboardPage() {
