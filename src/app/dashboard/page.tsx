@@ -23,7 +23,7 @@ function statusVariant(status: string): "success" | "secondary" {
     return "secondary";
   }
 
-  if (status === "processed" || status === "completed" || status === "uploaded") {
+  if (status === "processed" || status === "compared" || status === "completed" || status === "uploaded") {
     return "success";
   }
 

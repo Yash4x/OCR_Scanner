@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { ComparisonViewer } from "@/components/comparison-viewer";
 import { ProcessDocumentsForm } from "@/components/process-documents-form";
+import { RunComparisonForm } from "@/components/run-comparison-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { createClient } from "@/lib/supabase/server";
-import type { DocumentLineRecord, DocumentOutputRecord, DocumentRecord } from "@/lib/types";
+import type { ComparisonLineRecord, DocumentLineRecord, DocumentOutputRecord, DocumentRecord } from "@/lib/types";
 
 function formatDate(dateString: string) {
   return new Date(dateString).toLocaleString();
@@ -20,7 +22,7 @@ function badgeVariant(status: string): "success" | "warning" | "secondary" | "de
     return "destructive";
   }
 
-  if (status === "processed" || status === "completed" || status === "uploaded") {
+  if (status === "processed" || status === "compared" || status === "completed" || status === "uploaded") {
     return "success";
   }
 
@@ -123,6 +125,34 @@ export default async function ComparisonDetailPage({
 
   console.log(`[compare:page] loaded outputs for ${id}: ${(documentOutputs ?? []).length}`);
 
+  const { data: comparisonLines } = await supabase
+    .from("comparison_lines")
+    .select(
+      "id, comparison_id, user_id, old_line_id, new_line_id, old_page_number, new_page_number, old_line_number, new_line_number, old_text, new_text, normalized_old_text, normalized_new_text, section_title, change_type, similarity_score, created_at",
+    )
+    .eq("comparison_id", comparison.id)
+    .eq("user_id", user.id);
+
+  const sortedComparisonLines = (comparisonLines ?? [])
+    .slice()
+    .sort((left: ComparisonLineRecord, right: ComparisonLineRecord) => {
+      const leftPage = left.old_page_number ?? left.new_page_number ?? Number.MAX_SAFE_INTEGER;
+      const rightPage = right.old_page_number ?? right.new_page_number ?? Number.MAX_SAFE_INTEGER;
+
+      if (leftPage !== rightPage) {
+        return leftPage - rightPage;
+      }
+
+      const leftLine = left.old_line_number ?? left.new_line_number ?? Number.MAX_SAFE_INTEGER;
+      const rightLine = right.old_line_number ?? right.new_line_number ?? Number.MAX_SAFE_INTEGER;
+
+      if (leftLine !== rightLine) {
+        return leftLine - rightLine;
+      }
+
+      return left.created_at.localeCompare(right.created_at);
+    });
+
   const linesByDocumentId = (documentLines ?? []).reduce<Record<string, DocumentLineRecord[]>>(
     (result, line) => {
       result[line.document_id] ||= [];
@@ -180,7 +210,10 @@ export default async function ComparisonDetailPage({
             <p>
               <span className="text-slate-500">Uploaded at:</span> {formatDate(comparison.created_at)}
             </p>
-            <ProcessDocumentsForm comparisonId={comparison.id} />
+            <div className="flex flex-wrap gap-3">
+              <ProcessDocumentsForm comparisonId={comparison.id} />
+              <RunComparisonForm comparisonId={comparison.id} />
+            </div>
             <div className="grid gap-4 md:grid-cols-2">
               {(["old", "new"] as const).map((role) => {
                 const document = documentsByRole[role];
@@ -250,6 +283,23 @@ export default async function ComparisonDetailPage({
               <p>
                 <span className="text-slate-500">New document:</span> {newFileName}
               </p>
+            </div>
+            <div className="space-y-4 border-t border-slate-200 pt-6">
+              <div>
+                <h2 className="text-2xl font-semibold text-slate-900">Comparison Viewer</h2>
+                <p className="text-sm text-slate-600">
+                  Side-by-side comparison of the old and new document lines.
+                </p>
+              </div>
+              {sortedComparisonLines.length > 0 ? (
+                <ComparisonViewer lines={sortedComparisonLines} />
+              ) : (
+                <Card className="border-dashed border-slate-300 bg-slate-50">
+                  <CardContent className="p-6 text-sm text-slate-600">
+                    Run the comparison to generate the side-by-side diff.
+                  </CardContent>
+                </Card>
+              )}
             </div>
           </CardContent>
         </Card>

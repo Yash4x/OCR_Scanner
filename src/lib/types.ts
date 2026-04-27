@@ -1,6 +1,13 @@
-export type ComparisonStatus = "uploaded" | "processing" | "processed" | "completed" | "failed";
+export type ComparisonStatus = "uploaded" | "processing" | "processed" | "compared" | "completed" | "failed";
 export type DocumentStatus = "uploaded" | "processing" | "processed" | "failed";
 export type DocumentOutputType = "txt" | "markdown";
+export type ComparisonLineChangeType =
+  | "unchanged"
+  | "modified"
+  | "added"
+  | "removed"
+  | "moved"
+  | "formatting_only";
 export type DocumentBlockType =
   | "heading"
   | "paragraph"
@@ -74,4 +81,24 @@ export interface ComparisonRecord {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+}
+
+export interface ComparisonLineRecord {
+  id: string;
+  comparison_id: string;
+  user_id: string;
+  old_line_id: string | null;
+  new_line_id: string | null;
+  old_page_number: number | null;
+  new_page_number: number | null;
+  old_line_number: number | null;
+  new_line_number: number | null;
+  old_text: string | null;
+  new_text: string | null;
+  normalized_old_text: string | null;
+  normalized_new_text: string | null;
+  section_title: string | null;
+  change_type: ComparisonLineChangeType;
+  similarity_score: number | null;
+  created_at: string;
 }

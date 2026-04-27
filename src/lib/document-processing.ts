@@ -38,8 +38,6 @@ type PdfCanvasFactory = {
   destroy(canvasAndContext: { canvas: { toBuffer(format: string): Buffer }; context: unknown }): void;
 };
 
-let canvasModulePromise: Promise<typeof import("@napi-rs/canvas")> | null = null;
-
 const pdfjsWorkerGlobal = globalThis as typeof globalThis & {
   pdfjsWorker?: {
     WorkerMessageHandler: typeof WorkerMessageHandler;
@@ -50,11 +48,6 @@ if (!pdfjsWorkerGlobal.pdfjsWorker) {
   pdfjsWorkerGlobal.pdfjsWorker = {
     WorkerMessageHandler,
   };
-}
-
-async function getCanvasModule() {
-  canvasModulePromise ||= import("@napi-rs/canvas");
-  return canvasModulePromise;
 }
 
 const PDFJS_ASSET_BASE_PATH = `${process.cwd()}/node_modules/pdfjs-dist/`;
