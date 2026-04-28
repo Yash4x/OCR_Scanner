@@ -1,13 +1,21 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ComparisonViewer } from "@/components/comparison-viewer";
+import { GenerateSummaryForm } from "@/components/generate-summary-form";
 import { ProcessDocumentsForm } from "@/components/process-documents-form";
 import { RunComparisonForm } from "@/components/run-comparison-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { createClient } from "@/lib/supabase/server";
-import type { ComparisonLineRecord, DocumentLineRecord, DocumentOutputRecord, DocumentRecord } from "@/lib/types";
+import type {
+  ChangeSummaryRecord,
+  ComparisonLineRecord,
+  ComparisonSummaryRecord,
+  DocumentLineRecord,
+  DocumentOutputRecord,
+  DocumentRecord,
+} from "@/lib/types";
 
 function formatDate(dateString: string) {
   return new Date(dateString).toLocaleString();
@@ -22,7 +30,13 @@ function badgeVariant(status: string): "success" | "warning" | "secondary" | "de
     return "destructive";
   }
 
-  if (status === "processed" || status === "compared" || status === "completed" || status === "uploaded") {
+  if (
+    status === "processed" ||
+    status === "compared" ||
+    status === "summarized" ||
+    status === "completed" ||
+    status === "uploaded"
+  ) {
     return "success";
   }
 
@@ -133,6 +147,22 @@ export default async function ComparisonDetailPage({
     .eq("comparison_id", comparison.id)
     .eq("user_id", user.id);
 
+  const [{ data: comparisonSummary }, { data: changeSummaries }] = await Promise.all([
+    supabase
+      .from("comparison_summaries")
+      .select("id, comparison_id, user_id, executive_summary, major_changes, risk_level, created_at, updated_at")
+      .eq("comparison_id", comparison.id)
+      .eq("user_id", user.id)
+      .maybeSingle(),
+    supabase
+      .from("change_summaries")
+      .select(
+        "id, comparison_id, comparison_line_id, user_id, section_title, change_type, short_summary, old_meaning, new_meaning, practical_impact, risk_level, confidence, created_at",
+      )
+      .eq("comparison_id", comparison.id)
+      .eq("user_id", user.id),
+  ]);
+
   const sortedComparisonLines = (comparisonLines ?? [])
     .slice()
     .sort((left: ComparisonLineRecord, right: ComparisonLineRecord) => {
@@ -190,6 +220,14 @@ export default async function ComparisonDetailPage({
     newMarkdownOutput ? createSignedDownloadLink(supabase, newMarkdownOutput.storage_path) : Promise.resolve(null),
   ]);
 
+  const summary = (comparisonSummary as ComparisonSummaryRecord | null) ?? null;
+  const changeSummaryRows = (changeSummaries as ChangeSummaryRecord[] | null) ?? [];
+  const changeSummariesByLineId = Object.fromEntries(
+    changeSummaryRows.map((item) => [item.comparison_line_id, item]),
+  ) as Record<string, ChangeSummaryRecord>;
+  const changedCount = sortedComparisonLines.filter((line) => line.change_type !== "unchanged").length;
+  const highRiskCount = changeSummaryRows.filter((item) => item.risk_level === "high").length;
+
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-10">
       <div className="mx-auto max-w-5xl space-y-6">
@@ -213,7 +251,117 @@ export default async function ComparisonDetailPage({
             <div className="flex flex-wrap gap-3">
               <ProcessDocumentsForm comparisonId={comparison.id} />
               <RunComparisonForm comparisonId={comparison.id} />
+              <GenerateSummaryForm comparisonId={comparison.id} />
             </div>
+            <Card className="border-slate-200 bg-slate-50/70">
+              <CardHeader>
+                <CardTitle className="text-lg">AI Summary</CardTitle>
+                <CardDescription>Executive summary and major document changes.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {summary ? (
+                  <>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Badge variant={summary.risk_level === "high" ? "destructive" : summary.risk_level === "medium" ? "warning" : "secondary"}>
+                        Overall risk: {summary.risk_level ?? "unknown"}
+                      </Badge>
+                      <span className="text-xs uppercase tracking-wide text-slate-500">
+                        Changed lines: {changedCount}
+                      </span>
+                      <span className="text-xs uppercase tracking-wide text-slate-500">
+                        High importance lines: {highRiskCount}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-slate-500">Executive summary</p>
+                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{summary.executive_summary}</p>
+                    </div>
+                    <div className="space-y-3">
+                      <p className="text-xs uppercase tracking-wide text-slate-500">Major changes</p>
+                      {summary.major_changes.length === 0 ? (
+                        <p className="text-sm text-slate-600">No major changes returned by AI.</p>
+                      ) : (
+                        <div className="space-y-3">
+                          {summary.major_changes.map((item, index) => (
+                            <div key={`${item.section_title}-${index}`} className="rounded-md border border-slate-200 bg-white p-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="font-medium text-slate-900">{item.section_title || "Unknown section"}</p>
+                                <Badge
+                                  variant={
+                                    item.risk_level === "high"
+                                      ? "destructive"
+                                      : item.risk_level === "medium"
+                                        ? "warning"
+                                        : "secondary"
+                                  }
+                                >
+                                  {item.risk_level}
+                                </Badge>
+                              </div>
+                              <p className="mt-2 text-sm text-slate-700">{item.what_changed}</p>
+                              <p className="mt-1 text-sm text-slate-600">
+                                <span className="font-medium text-slate-700">Meaning now:</span> {item.meaning_now}
+                              </p>
+                              <p className="mt-1 text-sm text-slate-600">
+                                <span className="font-medium text-slate-700">Practical impact:</span> {item.practical_impact}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-sm text-slate-600">
+                    Generate AI Summary to create an executive summary, major changes, and line-level explanations.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+            <Card className="border-slate-200 bg-white/80">
+              <CardHeader>
+                <CardTitle className="text-lg">Exports</CardTitle>
+                <CardDescription>Download recreated outputs and comparison reports.</CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-wrap gap-2">
+                {oldTxtUrl ? (
+                  <Button asChild size="sm" variant="secondary">
+                    <a href={oldTxtUrl} target="_blank" rel="noreferrer">
+                      Download old recreated TXT
+                    </a>
+                  </Button>
+                ) : null}
+                {newTxtUrl ? (
+                  <Button asChild size="sm" variant="secondary">
+                    <a href={newTxtUrl} target="_blank" rel="noreferrer">
+                      Download new recreated TXT
+                    </a>
+                  </Button>
+                ) : null}
+                {oldMarkdownUrl ? (
+                  <Button asChild size="sm" variant="secondary">
+                    <a href={oldMarkdownUrl} target="_blank" rel="noreferrer">
+                      Download old recreated Markdown
+                    </a>
+                  </Button>
+                ) : null}
+                {newMarkdownUrl ? (
+                  <Button asChild size="sm" variant="secondary">
+                    <a href={newMarkdownUrl} target="_blank" rel="noreferrer">
+                      Download new recreated Markdown
+                    </a>
+                  </Button>
+                ) : null}
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/compare/${comparison.id}/report/markdown`}>Export comparison report as Markdown</Link>
+                </Button>
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/compare/${comparison.id}/report/pdf`} target="_blank">
+                    Export comparison report as PDF
+                  </Link>
+                </Button>
+              </CardContent>
+            </Card>
             <div className="grid gap-4 md:grid-cols-2">
               {(["old", "new"] as const).map((role) => {
                 const document = documentsByRole[role];
@@ -292,7 +440,7 @@ export default async function ComparisonDetailPage({
                 </p>
               </div>
               {sortedComparisonLines.length > 0 ? (
-                <ComparisonViewer lines={sortedComparisonLines} />
+                <ComparisonViewer lines={sortedComparisonLines} changeSummariesByLineId={changeSummariesByLineId} />
               ) : (
                 <Card className="border-dashed border-slate-300 bg-slate-50">
                   <CardContent className="p-6 text-sm text-slate-600">

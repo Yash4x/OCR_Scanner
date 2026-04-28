@@ -6,13 +6,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import type { ComparisonLineRecord, ComparisonLineChangeType } from "@/lib/types";
+import type { ChangeSummaryRecord, ComparisonLineRecord, ComparisonLineChangeType } from "@/lib/types";
 
-type ComparisonFilter = "all" | "changed" | "added" | "removed" | "modified" | "formatting_only";
+type ComparisonFilter = "all" | "changed" | "high_risk" | "added" | "removed" | "modified" | "formatting_only";
 
 const filterOptions: Array<{ value: ComparisonFilter; label: string }> = [
   { value: "all", label: "Show all" },
   { value: "changed", label: "Changed only" },
+  { value: "high_risk", label: "High importance only" },
   { value: "added", label: "Added" },
   { value: "removed", label: "Removed" },
   { value: "modified", label: "Modified" },
@@ -63,7 +64,7 @@ function formatLocation(pageNumber: number | null, lineNumber: number | null) {
   return `Page ${pageNumber ?? "-"} • Line ${lineNumber ?? "-"}`;
 }
 
-function matchesSearch(line: ComparisonLineRecord, searchValue: string) {
+function matchesSearch(line: ComparisonLineRecord, summary: ChangeSummaryRecord | null, searchValue: string) {
   if (!searchValue) {
     return true;
   }
@@ -72,6 +73,10 @@ function matchesSearch(line: ComparisonLineRecord, searchValue: string) {
     line.old_text,
     line.new_text,
     line.section_title,
+    summary?.short_summary,
+    summary?.old_meaning,
+    summary?.new_meaning,
+    summary?.practical_impact,
     line.old_page_number?.toString(),
     line.new_page_number?.toString(),
     line.old_line_number?.toString(),
@@ -84,7 +89,13 @@ function matchesSearch(line: ComparisonLineRecord, searchValue: string) {
   return haystack.includes(searchValue.toLowerCase().trim());
 }
 
-export function ComparisonViewer({ lines }: { lines: ComparisonLineRecord[] }) {
+export function ComparisonViewer({
+  lines,
+  changeSummariesByLineId,
+}: {
+  lines: ComparisonLineRecord[];
+  changeSummariesByLineId: Record<string, ChangeSummaryRecord>;
+}) {
   const [filter, setFilter] = useState<ComparisonFilter>("all");
   const [search, setSearch] = useState("");
   const [selectedLineId, setSelectedLineId] = useState<string | null>(lines[0]?.id ?? null);
@@ -95,22 +106,26 @@ export function ComparisonViewer({ lines }: { lines: ComparisonLineRecord[] }) {
     const removed = lines.filter((line) => line.change_type === "removed").length;
     const modified = lines.filter((line) => line.change_type === "modified").length;
     const unchanged = lines.filter((line) => line.change_type === "unchanged").length;
+    const highRisk = lines.filter((line) => changeSummariesByLineId[line.id]?.risk_level === "high").length;
 
-    return { total, added, removed, modified, unchanged };
-  }, [lines]);
+    return { total, added, removed, modified, unchanged, highRisk };
+  }, [changeSummariesByLineId, lines]);
 
   const visibleLines = useMemo(() => {
     return lines.filter((line) => {
+      const lineSummary = changeSummariesByLineId[line.id] ?? null;
       const matchesFilter =
         filter === "all"
           ? true
           : filter === "changed"
             ? line.change_type !== "unchanged"
+            : filter === "high_risk"
+              ? lineSummary?.risk_level === "high"
             : line.change_type === filter;
 
-      return matchesFilter && matchesSearch(line, search);
+      return matchesFilter && matchesSearch(line, lineSummary, search);
     });
-  }, [filter, lines, search]);
+  }, [changeSummariesByLineId, filter, lines, search]);
 
   useEffect(() => {
     if (visibleLines.length === 0) {
@@ -124,11 +139,12 @@ export function ComparisonViewer({ lines }: { lines: ComparisonLineRecord[] }) {
   }, [selectedLineId, visibleLines]);
 
   const selectedLine = visibleLines.find((line) => line.id === selectedLineId) ?? null;
+  const selectedSummary = selectedLine ? changeSummariesByLineId[selectedLine.id] ?? null : null;
 
   return (
     <div className="space-y-4">
       <div className="sticky top-0 z-20 space-y-4 rounded-xl border border-slate-200 bg-slate-50/95 p-4 backdrop-blur">
-        <div className="grid gap-3 md:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-6">
           <Card className="border-slate-200 bg-white/90">
             <CardContent className="p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Total lines</p>
@@ -157,6 +173,12 @@ export function ComparisonViewer({ lines }: { lines: ComparisonLineRecord[] }) {
             <CardContent className="p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Unchanged lines</p>
               <p className="mt-1 text-2xl font-semibold text-slate-900">{stats.unchanged}</p>
+            </CardContent>
+          </Card>
+          <Card className="border-slate-200 bg-white/90">
+            <CardContent className="p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">High importance</p>
+              <p className="mt-1 text-2xl font-semibold text-rose-700">{stats.highRisk}</p>
             </CardContent>
           </Card>
         </div>
@@ -251,7 +273,7 @@ export function ComparisonViewer({ lines }: { lines: ComparisonLineRecord[] }) {
         <Card className="sticky top-28 h-fit border-slate-200 bg-white/90">
           <CardHeader className="border-b border-slate-200">
             <CardTitle className="text-lg">Details</CardTitle>
-            <CardDescription>Selected comparison row and Phase 4 placeholder.</CardDescription>
+            <CardDescription>Selected row with AI explanation and practical impact.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4 pt-6">
             {selectedLine ? (
@@ -292,13 +314,44 @@ export function ComparisonViewer({ lines }: { lines: ComparisonLineRecord[] }) {
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">AI explanation</p>
-                  <p className="mt-2 text-sm text-slate-600">
-                    Placeholder for Phase 4. This panel will later show an AI-generated explanation of
-                    the change.
-                  </p>
-                </div>
+                {selectedSummary ? (
+                  <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs uppercase tracking-wide text-slate-500">AI explanation</p>
+                      <Badge variant={selectedSummary.risk_level === "high" ? "destructive" : selectedSummary.risk_level === "medium" ? "warning" : "secondary"}>
+                        {selectedSummary.risk_level} risk
+                      </Badge>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-slate-500">Short summary</p>
+                      <p>{selectedSummary.short_summary}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-slate-500">Old meaning</p>
+                      <p>{selectedSummary.old_meaning ?? "-"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-slate-500">New meaning</p>
+                      <p>{selectedSummary.new_meaning ?? "-"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-slate-500">Practical impact</p>
+                      <p>{selectedSummary.practical_impact ?? "-"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-slate-500">Confidence</p>
+                      <p>{typeof selectedSummary.confidence === "number" ? selectedSummary.confidence.toFixed(2) : "-"}</p>
+                    </div>
+                  </div>
+                ) : selectedLine.change_type === "unchanged" ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                    No AI explanation for unchanged lines.
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                    Generate AI Summary to view explanation details for this change.
+                  </div>
+                )}
               </>
             ) : (
               <p className="text-sm text-slate-500">Select a row to view details.</p>

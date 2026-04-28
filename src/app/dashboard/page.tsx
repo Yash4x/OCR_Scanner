@@ -23,7 +23,13 @@ function statusVariant(status: string): "success" | "secondary" {
     return "secondary";
   }
 
-  if (status === "processed" || status === "compared" || status === "completed" || status === "uploaded") {
+  if (
+    status === "processed" ||
+    status === "compared" ||
+    status === "summarized" ||
+    status === "completed" ||
+    status === "uploaded"
+  ) {
     return "success";
   }
 
@@ -46,6 +52,32 @@ export default async function DashboardPage() {
       "id, title, status, created_at, old_document:old_document_id(file_name), new_document:new_document_id(file_name)",
     )
     .order("created_at", { ascending: false });
+
+  const comparisonIds = (comparisons ?? []).map((comparison) => comparison.id);
+
+  const [{ data: changedLines }, { data: summaries }] = comparisonIds.length
+    ? await Promise.all([
+        supabase
+          .from("comparison_lines")
+          .select("comparison_id")
+          .in("comparison_id", comparisonIds)
+          .neq("change_type", "unchanged"),
+        supabase
+          .from("comparison_summaries")
+          .select("comparison_id, risk_level")
+          .in("comparison_id", comparisonIds),
+      ])
+    : [{ data: [] as Array<{ comparison_id: string }> }, { data: [] as Array<{ comparison_id: string; risk_level: string | null }> }];
+
+  const changeCountByComparisonId = (changedLines ?? []).reduce<Record<string, number>>((result, row) => {
+    result[row.comparison_id] = (result[row.comparison_id] ?? 0) + 1;
+    return result;
+  }, {});
+
+  const riskByComparisonId = (summaries ?? []).reduce<Record<string, string | null>>((result, row) => {
+    result[row.comparison_id] = row.risk_level;
+    return result;
+  }, {});
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-10">
@@ -97,6 +129,8 @@ export default async function DashboardPage() {
                   <TableRow>
                     <TableHead>Title</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Changes</TableHead>
+                    <TableHead>Risk</TableHead>
                     <TableHead>Old Document</TableHead>
                     <TableHead>New Document</TableHead>
                     <TableHead>Created</TableHead>
@@ -124,6 +158,24 @@ export default async function DashboardPage() {
                         <TableCell className="font-medium">{comparison.title}</TableCell>
                         <TableCell>
                           <Badge variant={statusVariant(comparison.status)}>{comparison.status}</Badge>
+                        </TableCell>
+                        <TableCell>{changeCountByComparisonId[comparison.id] ?? 0}</TableCell>
+                        <TableCell>
+                          {riskByComparisonId[comparison.id] ? (
+                            <Badge
+                              variant={
+                                riskByComparisonId[comparison.id] === "high"
+                                  ? "destructive"
+                                  : riskByComparisonId[comparison.id] === "medium"
+                                    ? "warning"
+                                    : "secondary"
+                              }
+                            >
+                              {riskByComparisonId[comparison.id]}
+                            </Badge>
+                          ) : (
+                            "-"
+                          )}
                         </TableCell>
                         <TableCell>{oldFileName}</TableCell>
                         <TableCell>{newFileName}</TableCell>

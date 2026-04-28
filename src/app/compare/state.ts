@@ -10,6 +10,10 @@ export interface RunComparisonState {
   error: string | null;
 }
 
+export interface GenerateSummaryState {
+  error: string | null;
+}
+
 export const initialCreateComparisonState: CreateComparisonState = {
   error: null,
 };
@@ -19,5 +23,9 @@ export const initialProcessComparisonState: ProcessComparisonState = {
 };
 
 export const initialRunComparisonState: RunComparisonState = {
+  error: null,
+};
+
+export const initialGenerateSummaryState: GenerateSummaryState = {
   error: null,
 };

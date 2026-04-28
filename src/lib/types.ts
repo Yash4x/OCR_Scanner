@@ -1,6 +1,7 @@
-export type ComparisonStatus = "uploaded" | "processing" | "processed" | "compared" | "completed" | "failed";
+export type ComparisonStatus = "uploaded" | "processing" | "processed" | "compared" | "summarized" | "completed" | "failed";
 export type DocumentStatus = "uploaded" | "processing" | "processed" | "failed";
 export type DocumentOutputType = "txt" | "markdown";
+export type SummaryRiskLevel = "low" | "medium" | "high";
 export type ComparisonLineChangeType =
   | "unchanged"
   | "modified"
@@ -100,5 +101,40 @@ export interface ComparisonLineRecord {
   section_title: string | null;
   change_type: ComparisonLineChangeType;
   similarity_score: number | null;
+  created_at: string;
+}
+
+export interface ComparisonSummaryRecord {
+  id: string;
+  comparison_id: string;
+  user_id: string;
+  executive_summary: string;
+  major_changes: Array<{
+    section_title: string;
+    old_text: string;
+    new_text: string;
+    what_changed: string;
+    meaning_now: string;
+    practical_impact: string;
+    risk_level: SummaryRiskLevel;
+  }>;
+  risk_level: SummaryRiskLevel | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChangeSummaryRecord {
+  id: string;
+  comparison_id: string;
+  comparison_line_id: string;
+  user_id: string;
+  section_title: string | null;
+  change_type: Exclude<ComparisonLineChangeType, "unchanged">;
+  short_summary: string;
+  old_meaning: string | null;
+  new_meaning: string | null;
+  practical_impact: string | null;
+  risk_level: SummaryRiskLevel;
+  confidence: number | null;
   created_at: string;
 }

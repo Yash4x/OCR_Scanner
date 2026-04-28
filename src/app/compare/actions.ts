@@ -4,8 +4,14 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { buildComparisonLines } from "@/lib/comparison-engine";
+import { generateLineExplanation, generateOverallSummary, groupChangedLines, toChangeSummaryRow } from "@/lib/summary-engine";
 import type { ComparisonStatus, DocumentLineRecord, DocumentOutputType, DocumentRecord } from "@/lib/types";
-import type { CreateComparisonState, ProcessComparisonState, RunComparisonState } from "@/app/compare/state";
+import type {
+  CreateComparisonState,
+  GenerateSummaryState,
+  ProcessComparisonState,
+  RunComparisonState,
+} from "@/app/compare/state";
 import {
   buildMarkdownOutput,
   buildPlainTextOutput,
@@ -474,6 +480,23 @@ function chunkArray<T>(items: T[], chunkSize: number) {
   return chunks;
 }
 
+async function runWithConcurrency<TInput, TOutput>(items: TInput[], concurrency: number, task: (item: TInput) => Promise<TOutput>) {
+  const results: TOutput[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const current = nextIndex;
+      nextIndex += 1;
+      results[current] = await task(items[current]);
+    }
+  }
+
+  const workerCount = Math.min(concurrency, items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
 export async function runComparisonAction(
   _prevState: RunComparisonState,
   formData: FormData,
@@ -584,6 +607,12 @@ export async function runComparisonAction(
       throw new Error(deleteError.message);
     }
 
+    const { error: deleteSummaryError } = await supabase.from("comparison_summaries").delete().eq("comparison_id", comparisonId);
+
+    if (deleteSummaryError) {
+      throw new Error(deleteSummaryError.message);
+    }
+
     for (const chunk of chunkArray(comparisonLines, 200)) {
       if (chunk.length === 0) {
         continue;
@@ -630,6 +659,153 @@ export async function runComparisonAction(
       .eq("id", comparisonId)
       .eq("user_id", user.id);
 
+    return { error: message };
+  }
+}
+
+export async function generateSummaryAction(
+  _prevState: GenerateSummaryState,
+  formData: FormData,
+): Promise<GenerateSummaryState> {
+  const comparisonIdValue = formData.get("comparisonId");
+  const comparisonId = typeof comparisonIdValue === "string" ? comparisonIdValue.trim() : "";
+
+  if (!comparisonId) {
+    return { error: "Comparison id is required." };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    return { error: "You must be logged in." };
+  }
+
+  try {
+    const { data: comparison, error: comparisonError } = await supabase
+      .from("comparisons")
+      .select("id, status")
+      .eq("id", comparisonId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (comparisonError || !comparison) {
+      return { error: comparisonError?.message ?? "Comparison not found." };
+    }
+
+    if (!["compared", "summarized"].includes(comparison.status)) {
+      return { error: "Run comparison before generating an AI summary." };
+    }
+
+    const { data: comparisonLines, error: linesError } = await supabase
+      .from("comparison_lines")
+      .select(
+        "id, comparison_id, user_id, old_line_id, new_line_id, old_page_number, new_page_number, old_line_number, new_line_number, old_text, new_text, normalized_old_text, normalized_new_text, section_title, change_type, similarity_score, created_at",
+      )
+      .eq("comparison_id", comparisonId)
+      .eq("user_id", user.id)
+      .order("old_page_number", { ascending: true })
+      .order("new_page_number", { ascending: true })
+      .order("old_line_number", { ascending: true })
+      .order("new_line_number", { ascending: true })
+      .order("created_at", { ascending: true });
+
+    if (linesError || !comparisonLines) {
+      return { error: linesError?.message ?? "Failed to load comparison lines." };
+    }
+
+    const changedLines = comparisonLines.filter((line) => line.change_type !== "unchanged");
+
+    if (changedLines.length === 0) {
+      return { error: "No changed lines found to summarize." };
+    }
+
+    traceComparisonStep(comparisonId, `building summaries for ${changedLines.length} changed line(s)`);
+
+    const groupedChanges = groupChangedLines(comparisonLines);
+    const overallSummary = await generateOverallSummary(groupedChanges);
+
+    const { error: deleteLineSummaryError } = await supabase
+      .from("change_summaries")
+      .delete()
+      .eq("comparison_id", comparisonId)
+      .eq("user_id", user.id);
+
+    if (deleteLineSummaryError) {
+      throw new Error(deleteLineSummaryError.message);
+    }
+
+    const { error: upsertComparisonSummaryError } = await supabase.from("comparison_summaries").upsert(
+      {
+        comparison_id: comparisonId,
+        user_id: user.id,
+        executive_summary: overallSummary.executive_summary,
+        major_changes: overallSummary.major_changes,
+        risk_level: overallSummary.overall_risk_level,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "comparison_id" },
+    );
+
+    if (upsertComparisonSummaryError) {
+      throw new Error(upsertComparisonSummaryError.message);
+    }
+
+    const explanationRows = await runWithConcurrency(changedLines, 3, async (line) => {
+      const explanation = await generateLineExplanation({
+        line,
+        allSortedLines: comparisonLines,
+      });
+
+      return toChangeSummaryRow({
+        comparisonId,
+        userId: user.id,
+        line,
+        explanation,
+      });
+    });
+
+    for (const chunk of chunkArray(explanationRows, 150)) {
+      if (chunk.length === 0) {
+        continue;
+      }
+
+      const { error: insertError } = await supabase.from("change_summaries").insert(chunk);
+
+      if (insertError) {
+        throw new Error(insertError.message);
+      }
+    }
+
+    const completedAt = new Date().toISOString();
+    const { error: finalUpdateError } = await supabase
+      .from("comparisons")
+      .update({
+        status: "summarized" satisfies ComparisonStatus,
+        updated_at: completedAt,
+        completed_at: completedAt,
+      })
+      .eq("id", comparisonId)
+      .eq("user_id", user.id);
+
+    if (finalUpdateError) {
+      throw new Error(finalUpdateError.message);
+    }
+
+    traceComparisonStep(comparisonId, "comparison marked summarized");
+    revalidatePath(`/compare/${comparisonId}`);
+    revalidatePath("/dashboard");
+    redirect(`/compare/${comparisonId}`);
+  } catch (error) {
+    if (error instanceof Error && error.message === "NEXT_REDIRECT") {
+      throw error;
+    }
+
+    const message = error instanceof Error ? error.message : "Failed to generate AI summary.";
+    console.error(`[summary:${comparisonId}] failed`, error);
     return { error: message };
   }
 }
