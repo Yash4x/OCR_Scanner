@@ -1,4 +1,5 @@
 import { createBrowserClient } from "@supabase/ssr";
+import { createNoopSupabaseClient, getSupabaseConfigErrorMessage } from "./no-op";
 
 export function createClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -7,7 +8,8 @@ export function createClient() {
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
   if (!url || !anonKey) {
-    throw new Error("Missing Supabase environment variables.");
+    console.warn(getSupabaseConfigErrorMessage());
+    return createNoopSupabaseClient();
   }
 
   return createBrowserClient(url, anonKey);

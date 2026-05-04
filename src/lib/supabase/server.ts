@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { createNoopSupabaseClient, getSupabaseConfigErrorMessage } from "./no-op";
 
 export async function createClient() {
   const cookieStore = await cookies();
@@ -9,7 +10,8 @@ export async function createClient() {
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
   if (!url || !anonKey) {
-    throw new Error("Missing Supabase environment variables.");
+    console.warn(getSupabaseConfigErrorMessage());
+    return createNoopSupabaseClient();
   }
 
   return createServerClient(url, anonKey, {

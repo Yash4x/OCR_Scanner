@@ -9,9 +9,13 @@
     "lint": "next lint"
   },
   "dependencies": {
+<<<<<<< Updated upstream
+=======
+    "@napi-rs/canvas": "^0.1.67",
+>>>>>>> Stashed changes
     "@radix-ui/react-slot": "^1.2.4",
     "@supabase/ssr": "^0.10.2",
-    "@supabase/supabase-js": "^2.104.1",
+    "@supabase/supabase-js": "^2.105.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.11.0",
