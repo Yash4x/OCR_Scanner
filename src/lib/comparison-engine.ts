@@ -137,7 +137,7 @@ function classifyMatch(oldLine: PreparedLine, newLine: PreparedLine, score: numb
   }
 
   if (score >= 0.9) {
-    return farLocation ? "moved" : "formatting_only";
+    return farLocation ? "moved" : "modified";
   }
 
   return "modified";

@@ -12,7 +12,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { isContentComparisonLine } from "@/lib/comparison-line-utils";
 import { createClient } from "@/lib/supabase/server";
+import type { ComparisonLineRecord } from "@/lib/types";
 
 function formatDate(dateString: string) {
   return new Date(dateString).toLocaleString();
@@ -59,7 +61,7 @@ export default async function DashboardPage() {
     ? await Promise.all([
         supabase
           .from("comparison_lines")
-          .select("comparison_id")
+          .select("comparison_id, change_type, old_text, new_text, normalized_old_text, normalized_new_text")
           .in("comparison_id", comparisonIds)
           .neq("change_type", "unchanged"),
         supabase
@@ -67,10 +69,13 @@ export default async function DashboardPage() {
           .select("comparison_id, risk_level")
           .in("comparison_id", comparisonIds),
       ])
-    : [{ data: [] as Array<{ comparison_id: string }> }, { data: [] as Array<{ comparison_id: string; risk_level: string | null }> }];
+    : [{ data: [] as ComparisonLineRecord[] }, { data: [] as Array<{ comparison_id: string; risk_level: string | null }> }];
 
   const changeCountByComparisonId = (changedLines ?? []).reduce<Record<string, number>>((result, row) => {
-    result[row.comparison_id] = (result[row.comparison_id] ?? 0) + 1;
+    if (isContentComparisonLine(row as ComparisonLineRecord)) {
+      result[row.comparison_id] = (result[row.comparison_id] ?? 0) + 1;
+    }
+
     return result;
   }, {});
 

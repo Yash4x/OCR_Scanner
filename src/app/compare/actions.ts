@@ -4,8 +4,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { buildComparisonLines } from "@/lib/comparison-engine";
+import { isContentComparisonLine, withEffectiveChangeType } from "@/lib/comparison-line-utils";
 import { generateLineExplanation, generateOverallSummary, groupChangedLines, toChangeSummaryRow } from "@/lib/summary-engine";
-import type { ComparisonStatus, DocumentLineRecord, DocumentOutputType, DocumentRecord } from "@/lib/types";
+import type { ComparisonLineRecord, ComparisonStatus, DocumentLineRecord, DocumentOutputType, DocumentRecord } from "@/lib/types";
 import type {
   CreateComparisonState,
   GenerateSummaryState,
@@ -717,7 +718,8 @@ export async function generateSummaryAction(
       return { error: linesError?.message ?? "Failed to load comparison lines." };
     }
 
-    const changedLines = comparisonLines.filter((line) => line.change_type !== "unchanged");
+    const effectiveComparisonLines = (comparisonLines as ComparisonLineRecord[]).map(withEffectiveChangeType);
+    const changedLines = effectiveComparisonLines.filter(isContentComparisonLine);
 
     if (changedLines.length === 0) {
       return { error: "No changed lines found to summarize." };
@@ -725,7 +727,7 @@ export async function generateSummaryAction(
 
     traceComparisonStep(comparisonId, `building summaries for ${changedLines.length} changed line(s)`);
 
-    const groupedChanges = groupChangedLines(comparisonLines);
+    const groupedChanges = groupChangedLines(effectiveComparisonLines);
     const overallSummary = await generateOverallSummary(groupedChanges);
 
     const { error: deleteLineSummaryError } = await supabase
@@ -757,7 +759,7 @@ export async function generateSummaryAction(
     const explanationRows = await runWithConcurrency(changedLines, 3, async (line) => {
       const explanation = await generateLineExplanation({
         line,
-        allSortedLines: comparisonLines,
+        allSortedLines: effectiveComparisonLines,
       });
 
       return toChangeSummaryRow({

@@ -1,3 +1,4 @@
+import { getEffectiveChangeType, isContentComparisonLine } from "@/lib/comparison-line-utils";
 import type { ChangeSummaryRecord, ComparisonLineRecord, ComparisonSummaryRecord } from "@/lib/types";
 
 function safe(value: string | null | undefined) {
@@ -30,7 +31,7 @@ export function buildComparisonReportMarkdown(params: {
   lines: ComparisonLineRecord[];
   changeSummaries: ChangeSummaryRecord[];
 }) {
-  const changedLines = params.lines.filter((line) => line.change_type !== "unchanged");
+  const changedLines = params.lines.filter(isContentComparisonLine);
   const explanationByLineId = Object.fromEntries(params.changeSummaries.map((row) => [row.comparison_line_id, row]));
 
   const changedLinesTableHeader = [
@@ -45,7 +46,7 @@ export function buildComparisonReportMarkdown(params: {
         "|",
         safe(line.section_title) || "-",
         "|",
-        safe(line.change_type),
+        safe(getEffectiveChangeType(line)),
         "|",
         safe(line.old_text) || "-",
         "|",

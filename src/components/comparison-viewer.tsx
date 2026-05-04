@@ -5,10 +5,11 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { getEffectiveChangeType, isTrueFormattingOnlyLine } from "@/lib/comparison-line-utils";
 import { cn } from "@/lib/utils";
 import type { ChangeSummaryRecord, ComparisonLineRecord, ComparisonLineChangeType } from "@/lib/types";
 
-type ComparisonFilter = "all" | "changed" | "high_risk" | "added" | "removed" | "modified" | "formatting_only";
+type ComparisonFilter = "all" | "changed" | "high_risk" | "added" | "removed" | "modified";
 
 const filterOptions: Array<{ value: ComparisonFilter; label: string }> = [
   { value: "all", label: "Show all" },
@@ -17,7 +18,6 @@ const filterOptions: Array<{ value: ComparisonFilter; label: string }> = [
   { value: "added", label: "Added" },
   { value: "removed", label: "Removed" },
   { value: "modified", label: "Modified" },
-  { value: "formatting_only", label: "Formatting only" },
 ];
 
 const changeTypeLabels: Record<ComparisonLineChangeType, string> = {
@@ -98,34 +98,39 @@ export function ComparisonViewer({
 }) {
   const [filter, setFilter] = useState<ComparisonFilter>("all");
   const [search, setSearch] = useState("");
-  const [selectedLineId, setSelectedLineId] = useState<string | null>(lines[0]?.id ?? null);
+  const contentLines = useMemo(
+    () => lines.filter((line) => !isTrueFormattingOnlyLine(line)),
+    [lines],
+  );
+  const [selectedLineId, setSelectedLineId] = useState<string | null>(contentLines[0]?.id ?? null);
 
   const stats = useMemo(() => {
-    const total = lines.length;
-    const added = lines.filter((line) => line.change_type === "added").length;
-    const removed = lines.filter((line) => line.change_type === "removed").length;
-    const modified = lines.filter((line) => line.change_type === "modified").length;
-    const unchanged = lines.filter((line) => line.change_type === "unchanged").length;
-    const highRisk = lines.filter((line) => changeSummariesByLineId[line.id]?.risk_level === "high").length;
+    const total = contentLines.length;
+    const added = contentLines.filter((line) => getEffectiveChangeType(line) === "added").length;
+    const removed = contentLines.filter((line) => getEffectiveChangeType(line) === "removed").length;
+    const modified = contentLines.filter((line) => getEffectiveChangeType(line) === "modified").length;
+    const unchanged = contentLines.filter((line) => getEffectiveChangeType(line) === "unchanged").length;
+    const highRisk = contentLines.filter((line) => changeSummariesByLineId[line.id]?.risk_level === "high").length;
 
     return { total, added, removed, modified, unchanged, highRisk };
-  }, [changeSummariesByLineId, lines]);
+  }, [changeSummariesByLineId, contentLines]);
 
   const visibleLines = useMemo(() => {
-    return lines.filter((line) => {
+    return contentLines.filter((line) => {
+      const effectiveChangeType = getEffectiveChangeType(line);
       const lineSummary = changeSummariesByLineId[line.id] ?? null;
       const matchesFilter =
         filter === "all"
           ? true
           : filter === "changed"
-            ? line.change_type !== "unchanged"
+            ? effectiveChangeType !== "unchanged"
             : filter === "high_risk"
               ? lineSummary?.risk_level === "high"
-            : line.change_type === filter;
+            : effectiveChangeType === filter;
 
       return matchesFilter && matchesSearch(line, lineSummary, search);
     });
-  }, [changeSummariesByLineId, filter, lines, search]);
+  }, [changeSummariesByLineId, contentLines, filter, search]);
 
   useEffect(() => {
     if (visibleLines.length === 0) {
@@ -224,6 +229,7 @@ export function ComparisonViewer({
                 <div className="divide-y divide-slate-200">
                   {visibleLines.map((line) => {
                     const isSelected = line.id === selectedLineId;
+                    const effectiveChangeType = getEffectiveChangeType(line);
 
                     return (
                       <button
@@ -232,7 +238,7 @@ export function ComparisonViewer({
                         onClick={() => setSelectedLineId(line.id)}
                         className={cn(
                           "w-full px-4 py-4 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-400",
-                          changeTypeStyles[line.change_type],
+                          changeTypeStyles[effectiveChangeType],
                           isSelected && "ring-2 ring-slate-900 ring-inset",
                         )}
                       >
@@ -247,8 +253,8 @@ export function ComparisonViewer({
                           </div>
 
                           <div className="flex items-center justify-center md:px-2">
-                            <Badge variant={changeTypeVariant(line.change_type)}>
-                              {changeTypeLabels[line.change_type]}
+                            <Badge variant={changeTypeVariant(effectiveChangeType)}>
+                              {changeTypeLabels[effectiveChangeType]}
                             </Badge>
                           </div>
 
@@ -279,8 +285,8 @@ export function ComparisonViewer({
             {selectedLine ? (
               <>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant={changeTypeVariant(selectedLine.change_type)}>
-                    {changeTypeLabels[selectedLine.change_type]}
+                  <Badge variant={changeTypeVariant(getEffectiveChangeType(selectedLine))}>
+                    {changeTypeLabels[getEffectiveChangeType(selectedLine)]}
                   </Badge>
                   <span className="text-sm text-slate-500">
                     Similarity: {selectedLine.similarity_score?.toFixed(2) ?? "-"}
@@ -343,7 +349,7 @@ export function ComparisonViewer({
                       <p>{typeof selectedSummary.confidence === "number" ? selectedSummary.confidence.toFixed(2) : "-"}</p>
                     </div>
                   </div>
-                ) : selectedLine.change_type === "unchanged" ? (
+                ) : getEffectiveChangeType(selectedLine) === "unchanged" ? (
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
                     No AI explanation for unchanged lines.
                   </div>

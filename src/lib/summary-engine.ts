@@ -1,4 +1,5 @@
 import { OpenAI } from "openai";
+import { isContentComparisonLine } from "@/lib/comparison-line-utils";
 import type { ChangeSummaryRecord, ComparisonLineRecord, SummaryRiskLevel } from "@/lib/types";
 
 const OVERALL_SUMMARY_PROMPT = `You are an AI document comparison assistant. You are given changed text from an old version and a new version of the same document. Your job is to summarize what changed in plain English.
@@ -170,7 +171,7 @@ function nearby(left: ComparisonLineRecord, right: ComparisonLineRecord) {
 
 export function groupChangedLines(lines: ComparisonLineRecord[]): SummaryGroup[] {
   const changed = lines
-    .filter((line) => line.change_type !== "unchanged")
+    .filter(isContentComparisonLine)
     .slice()
     .sort((left, right) => {
       const leftPage = left.old_page_number ?? left.new_page_number ?? Number.MAX_SAFE_INTEGER;

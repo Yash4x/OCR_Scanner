@@ -7,6 +7,7 @@ import { RunComparisonForm } from "@/components/run-comparison-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { isContentComparisonLine } from "@/lib/comparison-line-utils";
 import { createClient } from "@/lib/supabase/server";
 import type {
   ChangeSummaryRecord,
@@ -225,7 +226,7 @@ export default async function ComparisonDetailPage({
   const changeSummariesByLineId = Object.fromEntries(
     changeSummaryRows.map((item) => [item.comparison_line_id, item]),
   ) as Record<string, ChangeSummaryRecord>;
-  const changedCount = sortedComparisonLines.filter((line) => line.change_type !== "unchanged").length;
+  const changedCount = sortedComparisonLines.filter(isContentComparisonLine).length;
   const highRiskCount = changeSummaryRows.filter((item) => item.risk_level === "high").length;
 
   return (
