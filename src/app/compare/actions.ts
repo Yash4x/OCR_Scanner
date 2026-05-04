@@ -4,13 +4,20 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { buildComparisonLines } from "@/lib/comparison-engine";
+<<<<<<< HEAD
 import { isContentComparisonLine, withEffectiveChangeType } from "@/lib/comparison-line-utils";
+=======
+import { generateComparisonSpans, getComparisonPipelineHealth } from "@/lib/comparison-spans";
+>>>>>>> 2d40c72 (ai detection)
 import { generateLineExplanation, generateOverallSummary, groupChangedLines, toChangeSummaryRow } from "@/lib/summary-engine";
 import type { ComparisonLineRecord, ComparisonStatus, DocumentLineRecord, DocumentOutputType, DocumentRecord } from "@/lib/types";
 import type {
   CreateComparisonState,
   GenerateSummaryState,
   ProcessComparisonState,
+  PipelineHealthCheckState,
+  RegenerateFullComparisonState,
+  RegeneratePaperHighlightsState,
   RunComparisonState,
 } from "@/app/compare/state";
 import {
@@ -23,6 +30,7 @@ import {
   renderPdfPages,
   toDocumentLineRows,
   toDocumentPageRows,
+  toDocumentWordRows,
 } from "@/lib/document-processing";
 
 const ACCEPTED_TYPES = [
@@ -281,6 +289,7 @@ async function processSingleDocument(
 
   await supabase.from("document_pages").delete().eq("document_id", document.id);
   await supabase.from("document_lines").delete().eq("document_id", document.id);
+  await supabase.from("document_words").delete().eq("document_id", document.id);
   await supabase.from("document_outputs").delete().eq("document_id", document.id);
 
   if (pageRows.length > 0) {
@@ -298,6 +307,27 @@ async function processSingleDocument(
 
     if (linesError) {
       throw new Error(linesError.message);
+    }
+
+    // Build a map of line IDs by page and line number for word insertion
+    const { data: insertedLines } = await supabase
+      .from("document_lines")
+      .select("id, page_number, line_number")
+      .eq("document_id", document.id);
+
+    const lineIdsByPageAndLine = Object.fromEntries(
+      (insertedLines ?? []).map((line) => [`${line.page_number}:${line.line_number}`, line.id]),
+    ) as Record<string, string>;
+
+    const wordRows = toDocumentWordRows(document.id, userId, lineIdsByPageAndLine, ocrPages);
+
+    if (wordRows.length > 0) {
+      traceProcessStep(comparisonId, `${document.document_role}: insert document_words (${wordRows.length})`);
+      const { error: wordsError } = await supabase.from("document_words").insert(wordRows);
+
+      if (wordsError) {
+        throw new Error(wordsError.message);
+      }
     }
   }
 
@@ -498,6 +528,170 @@ async function runWithConcurrency<TInput, TOutput>(items: TInput[], concurrency:
   return results;
 }
 
+async function runComparisonPipeline(params: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  comparisonId: string;
+  userId: string;
+}) {
+  const { supabase, comparisonId, userId } = params;
+
+  const { data: comparison, error: comparisonError } = await supabase
+    .from("comparisons")
+    .select("id, status, old_document_id, new_document_id")
+    .eq("id", comparisonId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (comparisonError || !comparison) {
+    return { error: comparisonError?.message ?? "Comparison not found." } as const;
+  }
+
+  traceComparisonStep(comparisonId, "comparison loaded");
+
+  const { data: documents, error: documentsError } = await supabase
+    .from("documents")
+    .select("id, user_id, comparison_id, document_role, file_name, file_type, file_size, storage_path, status, created_at, updated_at")
+    .eq("comparison_id", comparisonId)
+    .eq("user_id", userId)
+    .order("document_role", { ascending: true });
+
+  if (documentsError || !documents || documents.length !== 2) {
+    return { error: documentsError?.message ?? "Both documents must be uploaded before comparing." } as const;
+  }
+
+  const oldDocument = documents.find((document) => document.document_role === "old");
+  const newDocument = documents.find((document) => document.document_role === "new");
+
+  if (!oldDocument || !newDocument) {
+    return { error: "Both old and new documents are required." } as const;
+  }
+
+  if (oldDocument.status !== "processed" || newDocument.status !== "processed") {
+    return { error: "Both documents must be processed before running the comparison." } as const;
+  }
+
+  const { data: oldLines, error: oldLinesError } = await supabase
+    .from("document_lines")
+    .select("id, document_id, user_id, page_number, line_number, text, normalized_text, section_title, block_type, bbox_top, bbox_left, bbox_width, bbox_height, confidence, created_at")
+    .eq("document_id", oldDocument.id)
+    .eq("user_id", userId)
+    .order("page_number", { ascending: true })
+    .order("line_number", { ascending: true });
+
+  const { data: newLines, error: newLinesError } = await supabase
+    .from("document_lines")
+    .select("id, document_id, user_id, page_number, line_number, text, normalized_text, section_title, block_type, bbox_top, bbox_left, bbox_width, bbox_height, confidence, created_at")
+    .eq("document_id", newDocument.id)
+    .eq("user_id", userId)
+    .order("page_number", { ascending: true })
+    .order("line_number", { ascending: true });
+
+  if (oldLinesError || newLinesError) {
+    return { error: oldLinesError?.message ?? newLinesError?.message ?? "Failed to load document lines." } as const;
+  }
+
+  if (!oldLines || !newLines) {
+    return { error: "Document lines are missing for one or both documents." } as const;
+  }
+
+  traceComparisonStep(comparisonId, `loaded ${oldLines.length} old line(s) and ${newLines.length} new line(s)`);
+
+  const statusNow = new Date().toISOString();
+
+  const { error: processingError } = await supabase
+    .from("comparisons")
+    .update({ status: "processing", updated_at: statusNow })
+    .eq("id", comparisonId)
+    .eq("user_id", userId);
+
+  if (processingError) {
+    return { error: processingError.message } as const;
+  }
+
+  const comparisonLines = buildComparisonLines({
+    comparisonId,
+    userId,
+    oldLines: oldLines as DocumentLineRecord[],
+    newLines: newLines as DocumentLineRecord[],
+  });
+
+  traceComparisonStep(comparisonId, `built ${comparisonLines.length} comparison row(s)`);
+
+  const { error: deleteError } = await supabase.from("comparison_lines").delete().eq("comparison_id", comparisonId);
+
+  if (deleteError) {
+    throw new Error(deleteError.message);
+  }
+
+  const { error: deleteSummaryError } = await supabase.from("comparison_summaries").delete().eq("comparison_id", comparisonId);
+
+  if (deleteSummaryError) {
+    throw new Error(deleteSummaryError.message);
+  }
+
+  for (const chunk of chunkArray(comparisonLines, 200)) {
+    if (chunk.length === 0) {
+      continue;
+    }
+
+    const { error: insertError } = await supabase.from("comparison_lines").insert(chunk);
+
+    if (insertError) {
+      throw new Error(insertError.message);
+    }
+  }
+
+  const { spans, diagnostics, stats } = await generateComparisonSpans({
+    supabase,
+    comparisonId,
+    userId,
+  });
+
+  const { error: deleteSpanError } = await supabase.from("comparison_spans").delete().eq("comparison_id", comparisonId);
+
+  if (deleteSpanError) {
+    throw new Error(deleteSpanError.message);
+  }
+
+  if (spans.length > 0) {
+    const { data: insertedSpans, error: insertSpanError } = await supabase.from("comparison_spans").insert(spans).select("id");
+
+    if (insertSpanError) {
+      console.error(`[comparison:${comparisonId}] comparison_spans insert failed`, insertSpanError);
+      throw new Error(insertSpanError.message);
+    }
+
+    traceComparisonStep(comparisonId, `comparison_spans insert ok: attempted=${spans.length}, inserted=${insertedSpans?.length ?? 0}`);
+  }
+
+  traceComparisonStep(comparisonId, `generated ${spans.length} comparison span(s)`);
+  if (diagnostics.length > 0) {
+    traceComparisonStep(comparisonId, `span diagnostics: ${diagnostics.length} skipped change(s)`);
+  }
+
+  const completedAt = new Date().toISOString();
+  const { error: finalComparisonUpdateError } = await supabase
+    .from("comparisons")
+    .update({
+      status: "compared" satisfies ComparisonStatus,
+      updated_at: completedAt,
+      completed_at: completedAt,
+    })
+    .eq("id", comparisonId)
+    .eq("user_id", userId);
+
+  if (finalComparisonUpdateError) {
+    throw new Error(finalComparisonUpdateError.message);
+  }
+
+  traceComparisonStep(comparisonId, "comparison marked compared");
+
+  return {
+    error: null,
+    stats,
+  } as const;
+}
+
 export async function runComparisonAction(
   _prevState: RunComparisonState,
   formData: FormData,
@@ -520,140 +714,22 @@ export async function runComparisonAction(
   }
 
   try {
-    const { data: comparison, error: comparisonError } = await supabase
-      .from("comparisons")
-      .select("id, status, old_document_id, new_document_id")
-      .eq("id", comparisonId)
-      .eq("user_id", user.id)
-      .maybeSingle();
+    const result = await runComparisonPipeline({ supabase, comparisonId, userId: user.id });
 
-    if (comparisonError || !comparison) {
-      return { error: comparisonError?.message ?? "Comparison not found." };
+    if (result.error) {
+      return { error: result.error };
     }
-
-    traceComparisonStep(comparisonId, "comparison loaded");
-
-    const { data: documents, error: documentsError } = await supabase
-      .from("documents")
-      .select("id, user_id, comparison_id, document_role, file_name, file_type, file_size, storage_path, status, created_at, updated_at")
-      .eq("comparison_id", comparisonId)
-      .eq("user_id", user.id)
-      .order("document_role", { ascending: true });
-
-    if (documentsError || !documents || documents.length !== 2) {
-      return { error: documentsError?.message ?? "Both documents must be uploaded before comparing." };
-    }
-
-    const oldDocument = documents.find((document) => document.document_role === "old");
-    const newDocument = documents.find((document) => document.document_role === "new");
-
-    if (!oldDocument || !newDocument) {
-      return { error: "Both old and new documents are required." };
-    }
-
-    if (oldDocument.status !== "processed" || newDocument.status !== "processed") {
-      return { error: "Both documents must be processed before running the comparison." };
-    }
-
-    const { data: oldLines, error: oldLinesError } = await supabase
-      .from("document_lines")
-      .select("id, document_id, user_id, page_number, line_number, text, normalized_text, section_title, block_type, bbox_top, bbox_left, bbox_width, bbox_height, confidence, created_at")
-      .eq("document_id", oldDocument.id)
-      .eq("user_id", user.id)
-      .order("page_number", { ascending: true })
-      .order("line_number", { ascending: true });
-
-    const { data: newLines, error: newLinesError } = await supabase
-      .from("document_lines")
-      .select("id, document_id, user_id, page_number, line_number, text, normalized_text, section_title, block_type, bbox_top, bbox_left, bbox_width, bbox_height, confidence, created_at")
-      .eq("document_id", newDocument.id)
-      .eq("user_id", user.id)
-      .order("page_number", { ascending: true })
-      .order("line_number", { ascending: true });
-
-    if (oldLinesError || newLinesError) {
-      return { error: oldLinesError?.message ?? newLinesError?.message ?? "Failed to load document lines." };
-    }
-
-    if (!oldLines || !newLines) {
-      return { error: "Document lines are missing for one or both documents." };
-    }
-
-    traceComparisonStep(comparisonId, `loaded ${oldLines.length} old line(s) and ${newLines.length} new line(s)`);
-
-    const statusNow = new Date().toISOString();
-
-    const { error: processingError } = await supabase
-      .from("comparisons")
-      .update({ status: "processing", updated_at: statusNow })
-      .eq("id", comparisonId)
-      .eq("user_id", user.id);
-
-    if (processingError) {
-      return { error: processingError.message };
-    }
-
-    const comparisonLines = buildComparisonLines({
-      comparisonId,
-      userId: user.id,
-      oldLines: oldLines as DocumentLineRecord[],
-      newLines: newLines as DocumentLineRecord[],
-    });
-
-    traceComparisonStep(comparisonId, `built ${comparisonLines.length} comparison row(s)`);
-
-    const { error: deleteError } = await supabase.from("comparison_lines").delete().eq("comparison_id", comparisonId);
-
-    if (deleteError) {
-      throw new Error(deleteError.message);
-    }
-
-    const { error: deleteSummaryError } = await supabase.from("comparison_summaries").delete().eq("comparison_id", comparisonId);
-
-    if (deleteSummaryError) {
-      throw new Error(deleteSummaryError.message);
-    }
-
-    for (const chunk of chunkArray(comparisonLines, 200)) {
-      if (chunk.length === 0) {
-        continue;
-      }
-
-      const { error: insertError } = await supabase.from("comparison_lines").insert(chunk);
-
-      if (insertError) {
-        throw new Error(insertError.message);
-      }
-    }
-
-    const completedAt = new Date().toISOString();
-    const { error: finalComparisonUpdateError } = await supabase
-      .from("comparisons")
-      .update({
-        status: "compared" satisfies ComparisonStatus,
-        updated_at: completedAt,
-        completed_at: completedAt,
-      })
-      .eq("id", comparisonId)
-      .eq("user_id", user.id);
-
-    if (finalComparisonUpdateError) {
-      throw new Error(finalComparisonUpdateError.message);
-    }
-
-    traceComparisonStep(comparisonId, "comparison marked compared");
 
     revalidatePath(`/compare/${comparisonId}`);
+    revalidatePath(`/compare/${comparisonId}/paper-view`);
     redirect(`/compare/${comparisonId}`);
   } catch (error) {
-    // Re-throw Next.js redirect errors (not real failures)
     if (error instanceof Error && error.message === "NEXT_REDIRECT") {
       throw error;
     }
 
     const message = error instanceof Error ? error.message : "Failed to compare documents.";
     console.error(`[comparison:${comparisonId}] failed`, error);
-
     await supabase
       .from("comparisons")
       .update({ status: "failed", updated_at: new Date().toISOString() })
@@ -661,6 +737,160 @@ export async function runComparisonAction(
       .eq("user_id", user.id);
 
     return { error: message };
+  }
+}
+
+export async function regenerateFullComparisonAction(
+  _prevState: RegenerateFullComparisonState,
+  formData: FormData,
+): Promise<RegenerateFullComparisonState> {
+  const comparisonIdValue = formData.get("comparisonId");
+  const comparisonId = typeof comparisonIdValue === "string" ? comparisonIdValue.trim() : "";
+
+  if (!comparisonId) {
+    return { error: "Comparison id is required.", message: null };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    return { error: "You must be logged in.", message: null };
+  }
+
+  try {
+    const result = await runComparisonPipeline({ supabase, comparisonId, userId: user.id });
+
+    if (result.error) {
+      return { error: result.error, message: null };
+    }
+
+    revalidatePath(`/compare/${comparisonId}`);
+    revalidatePath(`/compare/${comparisonId}/paper-view`);
+
+    return {
+      error: null,
+      message: `Rebuilt comparison lines and spans successfully.`,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to regenerate full comparison.";
+    console.error(`[comparison:${comparisonId}] regenerate full comparison failed`, error);
+    return { error: message, message: null };
+  }
+}
+
+export async function regeneratePaperHighlightsAction(
+  _prevState: RegeneratePaperHighlightsState,
+  formData: FormData,
+): Promise<RegeneratePaperHighlightsState> {
+  const comparisonIdValue = formData.get("comparisonId");
+  const comparisonId = typeof comparisonIdValue === "string" ? comparisonIdValue.trim() : "";
+
+  if (!comparisonId) {
+    return { error: "Comparison id is required.", message: null };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    return { error: "You must be logged in.", message: null };
+  }
+
+  try {
+    const { spans, diagnostics, changedLineCount, stats } = await generateComparisonSpans({
+      supabase,
+      comparisonId,
+      userId: user.id,
+    });
+
+    const { error: deleteError } = await supabase.from("comparison_spans").delete().eq("comparison_id", comparisonId);
+
+    if (deleteError) {
+      throw new Error(deleteError.message);
+    }
+
+    let insertErrorMessage: string | null = null;
+    let insertedCount = 0;
+
+    if (spans.length > 0) {
+      const { data: inserted, error: insertError } = await supabase.from("comparison_spans").insert(spans).select("id");
+
+      if (insertError) {
+        insertErrorMessage = insertError.message;
+        console.error(`[comparison:${comparisonId}] comparison_spans insert failed`, insertError);
+      } else {
+        insertedCount = inserted?.length ?? 0;
+        traceComparisonStep(comparisonId, `comparison_spans insert ok: attempted=${spans.length}, inserted=${insertedCount}`);
+      }
+    }
+
+    revalidatePath(`/compare/${comparisonId}`);
+    revalidatePath(`/compare/${comparisonId}/paper-view`);
+
+    const reasonSummary = Object.entries(stats.skippedReasons)
+      .map(([reason, count]) => `${reason}:${count}`)
+      .join(", ");
+
+    return {
+      error: insertErrorMessage,
+      message: insertErrorMessage
+        ? `Span generation attempted=${stats.spansAttempted}, generated=${spans.length}, inserted=${insertedCount}. Insert failed: ${insertErrorMessage}`
+        : `Regenerated spans: attempted=${stats.spansAttempted}, generated=${spans.length}, inserted=${insertedCount} from ${changedLineCount} changed line(s). Skipped=${diagnostics.length}${reasonSummary ? ` [${reasonSummary}]` : ""}.`,
+      stats: {
+        spansAttempted: stats.spansAttempted,
+        spansInserted: insertedCount,
+        skippedCount: diagnostics.length,
+        skippedReasons: stats.skippedReasons,
+        skippedDetails: diagnostics.slice(0, 10).map((d) => ({
+          comparison_line_id: d.comparison_line_id,
+          side: d.side,
+          reason_code: d.reason_code,
+          reason: d.reason,
+        })),
+        insertError: insertErrorMessage,
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to regenerate paper highlights.";
+    console.error(`[comparison:${comparisonId}] regenerate highlights failed`, error);
+    return { error: message, message: null, stats: null };
+  }
+}
+
+export async function getComparisonPipelineHealthAction(
+  _prevState: PipelineHealthCheckState,
+  formData: FormData,
+): Promise<PipelineHealthCheckState> {
+  const comparisonIdValue = formData.get("comparisonId");
+  const comparisonId = typeof comparisonIdValue === "string" ? comparisonIdValue.trim() : "";
+
+  if (!comparisonId) {
+    return { error: "Comparison id is required.", health: null };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    return { error: "You must be logged in.", health: null };
+  }
+
+  try {
+    const health = await getComparisonPipelineHealth({ supabase, comparisonId, userId: user.id });
+    return { error: null, health };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to compute pipeline health.";
+    return { error: message, health: null };
   }
 }
 

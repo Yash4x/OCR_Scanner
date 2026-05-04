@@ -9,6 +9,7 @@ export type ComparisonLineChangeType =
   | "removed"
   | "moved"
   | "formatting_only";
+export type ComparisonSpanSourceType = "word_diff" | "line_fallback" | "ai_aligned_span" | "estimated_line_fallback";
 export type DocumentBlockType =
   | "heading"
   | "paragraph"
@@ -41,6 +42,24 @@ export interface DocumentLineRecord {
   normalized_text: string;
   section_title: string | null;
   block_type: DocumentBlockType;
+  bbox_top: number | null;
+  bbox_left: number | null;
+  bbox_width: number | null;
+  bbox_height: number | null;
+  confidence: number | null;
+  created_at: string;
+}
+
+export interface DocumentWordRecord {
+  id: string;
+  document_id: string;
+  document_line_id: string;
+  user_id: string;
+  page_number: number;
+  line_number: number;
+  word_index: number;
+  text: string;
+  normalized_text: string;
   bbox_top: number | null;
   bbox_left: number | null;
   bbox_width: number | null;
@@ -101,6 +120,27 @@ export interface ComparisonLineRecord {
   section_title: string | null;
   change_type: ComparisonLineChangeType;
   similarity_score: number | null;
+  created_at: string;
+}
+
+export interface ComparisonSpanRecord {
+  id: string;
+  comparison_id: string;
+  comparison_line_id: string | null;
+  user_id: string;
+  side: "old" | "new";
+  page_number: number;
+  line_id: string | null;
+  word_ids: string[] | null;
+  change_type: string;
+  span_text: string;
+  bbox_left: number;
+  bbox_top: number;
+  bbox_width: number;
+  bbox_height: number;
+  source_type: ComparisonSpanSourceType;
+  linked_span_group: string | null;
+  confidence: number;
   created_at: string;
 }
 

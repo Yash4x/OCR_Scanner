@@ -1,8 +1,12 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ComparisonViewer } from "@/components/comparison-viewer";
+import { ComparisonTabs } from "@/components/comparison-tabs";
 import { GenerateSummaryForm } from "@/components/generate-summary-form";
 import { ProcessDocumentsForm } from "@/components/process-documents-form";
+import { RegenerateFullComparisonForm } from "@/components/regenerate-full-comparison-form";
+import { PipelineHealthCheckForm } from "@/components/pipeline-health-check-form";
+import { RegeneratePaperHighlightsForm } from "@/components/regenerate-paper-highlights-form";
 import { RunComparisonForm } from "@/components/run-comparison-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -236,6 +240,8 @@ export default async function ComparisonDetailPage({
           <Link href="/dashboard">Back to dashboard</Link>
         </Button>
 
+        <ComparisonTabs comparisonId={comparison.id} activeTab="text-diff" />
+
         <Card>
           <CardHeader>
             <CardTitle>{comparison.title}</CardTitle>
@@ -252,9 +258,12 @@ export default async function ComparisonDetailPage({
             <div className="flex flex-wrap gap-3">
               <ProcessDocumentsForm comparisonId={comparison.id} />
               <RunComparisonForm comparisonId={comparison.id} />
+              <RegenerateFullComparisonForm comparisonId={comparison.id} />
+              <RegeneratePaperHighlightsForm comparisonId={comparison.id} />
               <GenerateSummaryForm comparisonId={comparison.id} />
             </div>
-            <Card className="border-slate-200 bg-slate-50/70">
+            <PipelineHealthCheckForm comparisonId={comparison.id} />
+            <Card id="summary" className="border-slate-200 bg-slate-50/70">
               <CardHeader>
                 <CardTitle className="text-lg">AI Summary</CardTitle>
                 <CardDescription>Executive summary and major document changes.</CardDescription>
@@ -319,7 +328,7 @@ export default async function ComparisonDetailPage({
                 )}
               </CardContent>
             </Card>
-            <Card className="border-slate-200 bg-white/80">
+            <Card id="files" className="border-slate-200 bg-white/80">
               <CardHeader>
                 <CardTitle className="text-lg">Exports</CardTitle>
                 <CardDescription>Download recreated outputs and comparison reports.</CardDescription>
@@ -433,7 +442,7 @@ export default async function ComparisonDetailPage({
                 <span className="text-slate-500">New document:</span> {newFileName}
               </p>
             </div>
-            <div className="space-y-4 border-t border-slate-200 pt-6">
+            <div id="text-diff" className="space-y-4 border-t border-slate-200 pt-6">
               <div>
                 <h2 className="text-2xl font-semibold text-slate-900">Comparison Viewer</h2>
                 <p className="text-sm text-slate-600">

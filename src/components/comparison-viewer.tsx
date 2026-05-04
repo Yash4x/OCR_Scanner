@@ -9,7 +9,11 @@ import { getEffectiveChangeType, isTrueFormattingOnlyLine } from "@/lib/comparis
 import { cn } from "@/lib/utils";
 import type { ChangeSummaryRecord, ComparisonLineRecord, ComparisonLineChangeType } from "@/lib/types";
 
+<<<<<<< HEAD
 type ComparisonFilter = "all" | "changed" | "high_risk" | "added" | "removed" | "modified";
+=======
+type ComparisonFilter = "all" | "changed" | "high_risk" | "added" | "removed" | "modified" | "moved" | "formatting_only";
+>>>>>>> 2d40c72 (ai detection)
 
 const filterOptions: Array<{ value: ComparisonFilter; label: string }> = [
   { value: "all", label: "Show all" },
@@ -18,6 +22,11 @@ const filterOptions: Array<{ value: ComparisonFilter; label: string }> = [
   { value: "added", label: "Added" },
   { value: "removed", label: "Removed" },
   { value: "modified", label: "Modified" },
+<<<<<<< HEAD
+=======
+  { value: "moved", label: "Moved" },
+  { value: "formatting_only", label: "Formatting only" },
+>>>>>>> 2d40c72 (ai detection)
 ];
 
 const changeTypeLabels: Record<ComparisonLineChangeType, string> = {

@@ -12,3 +12,76 @@ body {
   color: var(--foreground);
   font-family: var(--font-geist-sans), sans-serif;
 }
+
+.comparison-highlight {
+  position: absolute;
+  display: block;
+  appearance: none;
+  padding: 0;
+  border-radius: 2px;
+  opacity: 0.65;
+  pointer-events: auto;
+  border: 0;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.2);
+}
+
+.comparison-highlight.modified {
+  background: rgba(250, 204, 21, 0.7);
+}
+
+.comparison-highlight.added {
+  background: rgba(34, 197, 94, 0.45);
+}
+
+.comparison-highlight.removed {
+  background: rgba(239, 68, 68, 0.45);
+}
+
+.comparison-highlight.formatting_only {
+  background: rgba(59, 130, 246, 0.55);
+}
+
+.comparison-highlight.moved {
+  background: rgba(168, 85, 247, 0.4);
+}
+
+.comparison-highlight.unchanged {
+  background: rgba(148, 163, 184, 0.25);
+}
+
+.comparison-span {
+  background: rgba(239, 68, 68, 0.45);
+}
+
+.comparison-highlight:hover,
+.comparison-highlight.selected {
+  opacity: 0.9;
+  outline: 2px solid #111827;
+  outline-offset: 1px;
+}
+.comparison-span.added {
+  background: rgba(34, 197, 94, 0.35);
+}
+
+.comparison-span.removed {
+  background: rgba(239, 68, 68, 0.35);
+}
+
+.comparison-span.modified {
+  background: rgba(250, 204, 21, 0.45);
+}
+
+.comparison-span.formatting_only {
+  background: rgba(59, 130, 246, 0.25);
+}
+
+.comparison-span.moved {
+  background: rgba(168, 85, 247, 0.3);
+}
+
+.comparison-span:hover,
+.comparison-span.selected {
+  opacity: 0.75;
+  outline: 1px solid #111827;
+}
